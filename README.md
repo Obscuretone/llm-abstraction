@@ -15,6 +15,9 @@ response = await backend.chat(
     ],
 )
 print(response.content)
+
+embeddings = await backend.embed(["Hello"])
+print(embeddings.embeddings[0])
 ```
 
 ## Build

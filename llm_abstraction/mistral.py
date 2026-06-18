@@ -6,13 +6,13 @@ from typing import cast
 
 import httpx
 
-from .base import ChatMessage, ChatResponse, TokenUsage
+from .base import ChatMessage, ChatResponse, EmbeddingResponse, TokenUsage
 from .exceptions import AIBackendError, AIRateLimitError, AITransientError
 from .retry_after import parse_retry_after_seconds
 
 
 class MistralBackend:
-    DEFAULT_API_URL = "https://api.mistral.ai/v1/chat/completions"
+    DEFAULT_API_URL = "https://api.mistral.ai/v1"
     RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
     def __init__(
@@ -40,6 +40,7 @@ class MistralBackend:
         *,
         temperature: float = 0.7,
         max_tokens: int | None = 1200,
+        response_format: Mapping[str, object] | None = None,
     ) -> ChatResponse:
         payload: dict[str, object] = {
             "model": self.model,
@@ -48,19 +49,61 @@ class MistralBackend:
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if response_format is not None:
+            payload["response_format"] = dict(response_format)
 
+        body = await self._post_json("chat/completions", payload)
+        return ChatResponse(
+            content=self._extract_content(body),
+            usage=self._extract_usage(body),
+            raw=body,
+        )
+
+    async def embed(
+        self,
+        inputs: Sequence[str],
+        *,
+        model: str = "mistral-embed",
+    ) -> EmbeddingResponse:
+        payload: dict[str, object] = {
+            "model": model,
+            "inputs": list(inputs),
+        }
+        body = await self._post_json("embeddings", payload)
+        return EmbeddingResponse(
+            embeddings=self._extract_embeddings(body),
+            usage=self._extract_usage(body),
+            raw=body,
+        )
+
+    async def complete(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int | None = 1200,
+        response_format: Mapping[str, object] | None = None,
+    ) -> str:
+        response = await self.chat(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+        )
+        return response.content
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+
+    async def _post_json(self, path: str, payload: dict[str, object]) -> dict[str, object]:
         for attempt in range(1, self.max_attempts + 1):
             try:
-                response = await self._post(payload)
+                response = await self._post(path, payload)
                 if response.status_code in self.RETRYABLE_STATUS_CODES:
                     raise self._retryable_error(response)
                 response.raise_for_status()
-                body = cast(dict[str, object], response.json())
-                return ChatResponse(
-                    content=self._extract_content(body),
-                    usage=self._extract_usage(body),
-                    raw=body,
-                )
+                return cast(dict[str, object], response.json())
             except AITransientError as exc:
                 if attempt >= self.max_attempts:
                     raise
@@ -70,28 +113,11 @@ class MistralBackend:
 
         raise AIBackendError("Mistral request failed after retries.")
 
-    async def complete(
-        self,
-        messages: Sequence[ChatMessage],
-        *,
-        temperature: float = 0.7,
-        max_tokens: int | None = 1200,
-    ) -> str:
-        response = await self.chat(
-            messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return response.content
-
-    async def aclose(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-
-    async def _post(self, payload: dict[str, object]) -> httpx.Response:
+    async def _post(self, path: str, payload: dict[str, object]) -> httpx.Response:
+        url = f"{self.api_url.rstrip('/')}/{path.lstrip('/')}"
         if self._client is not None:
             return await self._client.post(
-                self.api_url,
+                url,
                 headers=self._headers(),
                 json=payload,
                 timeout=self.timeout_seconds,
@@ -99,7 +125,7 @@ class MistralBackend:
 
         async with httpx.AsyncClient() as client:
             return await client.post(
-                self.api_url,
+                url,
                 headers=self._headers(),
                 json=payload,
                 timeout=self.timeout_seconds,
@@ -119,11 +145,13 @@ class MistralBackend:
                 message,
                 retry_after_seconds=retry_after_seconds,
                 status_code=response.status_code,
+                response_headers=response.headers,
             )
         return AITransientError(
             message,
             retry_after_seconds=retry_after_seconds,
             status_code=response.status_code,
+            response_headers=response.headers,
         )
 
     def _extract_content(self, body: Mapping[str, object]) -> str:
@@ -158,6 +186,25 @@ class MistralBackend:
             total_tokens=self._int_or_zero(raw_usage.get("total_tokens")),
         )
 
+    def _extract_embeddings(self, body: Mapping[str, object]) -> list[list[float]]:
+        data = body.get("data")
+        if not isinstance(data, list):
+            raise AIBackendError("Mistral response did not contain embeddings.")
+        data = cast(list[object], data)
+
+        embeddings: list[list[float]] = []
+        for item in data:
+            if not isinstance(item, Mapping):
+                raise AIBackendError("Mistral response did not contain embeddings.")
+            item = cast(Mapping[str, object], item)
+            embedding = item.get("embedding")
+            if not isinstance(embedding, list):
+                raise AIBackendError("Mistral response did not contain embeddings.")
+            embedding = cast(list[object], embedding)
+            embeddings.append([self._float(value) for value in embedding])
+
+        return embeddings
+
     def _int_or_zero(self, value: object) -> int:
         if value is None:
             return 0
@@ -169,3 +216,13 @@ class MistralBackend:
             except ValueError:
                 return 0
         return 0
+
+    def _float(self, value: object) -> float:
+        if isinstance(value, int | float):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError as exc:
+                raise AIBackendError("Mistral embedding contained a non-numeric value.") from exc
+        raise AIBackendError("Mistral embedding contained a non-numeric value.")

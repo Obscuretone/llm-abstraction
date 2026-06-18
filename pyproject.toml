@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-abstraction"
-version = "0.1.0"
+version = "0.3.0"
 description = "Async LLM backend abstraction with Retry-After aware clients."
 readme = "README.md"
 requires-python = ">=3.10"

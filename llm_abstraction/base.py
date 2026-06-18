@@ -21,6 +21,13 @@ class ChatResponse:
     raw: object | None = None
 
 
+@dataclass(frozen=True)
+class EmbeddingResponse:
+    embeddings: list[list[float]]
+    usage: TokenUsage = TokenUsage()
+    raw: object | None = None
+
+
 class AIBackend(Protocol):
     async def chat(
         self,
@@ -28,6 +35,7 @@ class AIBackend(Protocol):
         *,
         temperature: float = 0.7,
         max_tokens: int | None = 1200,
+        response_format: Mapping[str, object] | None = None,
     ) -> ChatResponse: ...
 
     async def complete(
@@ -36,4 +44,5 @@ class AIBackend(Protocol):
         *,
         temperature: float = 0.7,
         max_tokens: int | None = 1200,
+        response_format: Mapping[str, object] | None = None,
     ) -> str: ...

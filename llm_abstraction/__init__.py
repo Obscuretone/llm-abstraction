@@ -1,4 +1,4 @@
-from .base import AIBackend, ChatMessage, ChatResponse, TokenUsage
+from .base import AIBackend, ChatMessage, ChatResponse, EmbeddingResponse, TokenUsage
 from .exceptions import (
     AIBackendError,
     AIRateLimitError,
@@ -16,6 +16,7 @@ __all__ = [
     "AITransientError",
     "ChatMessage",
     "ChatResponse",
+    "EmbeddingResponse",
     "MistralBackend",
     "TokenUsage",
     "parse_retry_after_seconds",
