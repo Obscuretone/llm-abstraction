@@ -7,3 +7,16 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+
+# Local files and installed dependencies
+.DS_Store
+*.py[cod]
+venv/
+node_modules/
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.nira/*.db
+.nira/*.db-*
